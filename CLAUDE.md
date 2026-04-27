@@ -1,19 +1,19 @@
 # Readily Compliance
 
-MVP healthcare compliance web app. Accepts policy/procedure documents, analyzes them against regulatory frameworks using Claude, and surfaces gaps or risks.
+MVP healthcare compliance web app. Accepts policy/procedure documents, analyzes them against regulatory frameworks using Gemini, and surfaces gaps or risks.
 
 ## Tech Stack
 
 - **Streamlit** — UI and app server
 - **pypdf** — PDF text extraction
-- **Anthropic Python SDK** — Claude API calls for compliance analysis
+- **Google Generative AI Python SDK** — Gemini API calls for compliance analysis
 
 ## File Layout
 
 ```
 app.py              # Streamlit entry point; page layout and routing only
 extractor.py        # PDF text extraction (pypdf)
-analyzer.py         # Claude API calls and prompt logic
+analyzer.py         # Gemini API calls and prompt logic
 requirements.txt    # Python dependencies
 .env                # API keys (not committed)
 ```
