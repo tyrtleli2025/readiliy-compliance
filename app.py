@@ -1,53 +1,29 @@
-import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from math import ceil
 
 import streamlit as st
 
 from pdf_utils import extract_pdf_text
 from llm import extract_requirements, check_requirements_batch
+from retrieval import PolicyIndex
 
 BATCH_SIZE = 12
 MAX_WORKERS = 5
 
 
 @st.cache_resource
-def load_policy_library() -> tuple[str, int]:
+def build_policy_index() -> tuple[PolicyIndex, int]:
     with open("policies.json") as f:
         library: dict[str, str] = json.load(f)
-    parts = [f"--- Document: {name} ---\n{text}" for name, text in library.items()]
-    return "\n\n".join(parts), len(library)
+    return PolicyIndex(library), len(library)
 
 
 @st.cache_data
-def run_compliance_check(
-    requirements: tuple[str, ...], policy_text_hash: str, policy_text: str
-) -> list[dict]:
-    chunks = [
-        list(requirements[i : i + BATCH_SIZE])
-        for i in range(0, len(requirements), BATCH_SIZE)
-    ]
-    results_by_chunk: dict[int, list[dict]] = {}
-
-    progress = st.progress(0.0)
-    completed = 0
-
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {
-            executor.submit(check_requirements_batch, chunk, policy_text): idx
-            for idx, chunk in enumerate(chunks)
-        }
-        for future in as_completed(futures):
-            idx = futures[future]
-            results_by_chunk[idx] = future.result()
-            completed += 1
-            progress.progress(completed / len(chunks))
-
-    return [r for idx in range(len(chunks)) for r in results_by_chunk[idx]]
+def cached_batch(requirements: tuple[str, ...], policy_text: str) -> list[dict]:
+    return check_requirements_batch(list(requirements), policy_text)
 
 
-policy_text, policy_count = load_policy_library()
+policy_index, policy_count = build_policy_index()
 
 st.title("Compliance Checker")
 
@@ -67,9 +43,32 @@ if regulatory_file:
         st.write(f"{i}. {req}")
 
     st.subheader("Compliance check")
-    policy_hash = hashlib.md5(policy_text.encode()).hexdigest()
+    chunks = [
+        requirements[i : i + BATCH_SIZE]
+        for i in range(0, len(requirements), BATCH_SIZE)
+    ]
+
+    progress = st.progress(0.0)
+    results_by_chunk: dict[int, list[dict]] = {}
+    completed = 0
+
     with st.spinner("Checking requirements…"):
-        results = run_compliance_check(tuple(requirements), policy_hash, policy_text)
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {
+                executor.submit(
+                    cached_batch,
+                    tuple(chunk),
+                    policy_index.retrieve(" ".join(chunk)),
+                ): idx
+                for idx, chunk in enumerate(chunks)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                results_by_chunk[idx] = future.result()
+                completed += 1
+                progress.progress(completed / len(chunks))
+
+    results = [r for idx in range(len(chunks)) for r in results_by_chunk[idx]]
 
     for req, result in zip(requirements, results):
         met = result.get("met", False)
