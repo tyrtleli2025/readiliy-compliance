@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import sys
 import warnings
 
 from dotenv import load_dotenv
@@ -10,13 +11,15 @@ from google.genai import types
 load_dotenv()
 
 _client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+_last_raw_response: str = ""
+_EXTRACT_CHUNK_SIZE = 20_000
 
 
 def _call(prompt: str) -> str:
     response = _client.models.generate_content(
         model="gemini-2.5-flash",
         contents=[{"role": "user", "parts": [{"text": prompt}]}],
-        config=types.GenerateContentConfig(temperature=0),
+        config=types.GenerateContentConfig(temperature=0, max_output_tokens=65536),
     )
     return response.text.strip()
 
@@ -35,21 +38,60 @@ def _parse_json(raw: str):
     return value
 
 
-def extract_requirements(regulatory_text: str) -> list[str]:
-    prompt = (
-        "You are a compliance analyst reviewing a regulatory checklist document. "
-        "Requirements in these documents are typically numbered questions beginning with "
-        "phrases like 'Does the P&P state that...' or 'Does the plan ensure...'.\n\n"
-        "Rules:\n"
-        "- Extract exactly one requirement per numbered item in the source document.\n"
-        "- Do NOT split a numbered item into sub-parts, even if it references multiple "
-        "sub-items (e.g., '12 listed services', 'five elements', 'four special "
-        "considerations'). The numbered item is the unit of extraction.\n"
-        "- Preserve each requirement as a complete, standalone question exactly as written.\n"
-        "- Return ONLY a JSON array of strings, no prose, no markdown fences.\n\n"
-        f"{regulatory_text}"
+def _extract_prompt(text: str) -> str:
+    return (
+        "You are a compliance analyst extracting requirements from a regulatory document.\n\n"
+        "STEP 1 — Detect document type:\n"
+        "- If the document consists primarily of numbered items already phrased as yes/no "
+        "questions (e.g., 'Does the P&P state that...', 'Does the plan ensure...'), it is "
+        "a CHECKLIST document.\n"
+        "- Otherwise it is a NARRATIVE document.\n\n"
+        "STEP 2 — Extract requirements based on document type:\n\n"
+        "CHECKLIST: Extract exactly one requirement per numbered item, preserving each "
+        "question exactly as written. Do NOT split a numbered item into sub-parts even if "
+        "it references multiple elements (e.g., '12 listed services', 'five elements'). "
+        "The numbered item is the unit.\n\n"
+        "NARRATIVE: A requirement is any normative obligation — a statement where a party "
+        "(MCP, provider, contractor, plan, etc.) MUST, SHALL, IS REQUIRED TO, MAY NOT, or "
+        "MUST NOT do something, or IS RESPONSIBLE FOR something. Trigger words: must, "
+        "shall, required to, may not, must not, are required, are responsible for.\n"
+        "- Granularity: one normative statement = one requirement. If a paragraph contains "
+        "three 'shall' clauses, extract three requirements. If a sentence enumerates a list "
+        "of things a party must do, treat the whole sentence as one requirement — do NOT "
+        "fragment the list items.\n"
+        "- Phrasing: rewrite each extracted obligation as a yes/no compliance question "
+        "starting with 'Does the P&P state that...'. Example: 'MCPs must ensure that ECM "
+        "Providers comply with all applicable state and federal laws' → 'Does the P&P state "
+        "that MCPs must ensure ECM Providers comply with all applicable state and federal "
+        "laws?'\n"
+        "- Exclude: definitions, background context, legislative history, "
+        "table-of-contents entries, references to external documents, and descriptive prose "
+        "that does not impose an obligation. Only extract obligations.\n\n"
+        "Return ONLY a JSON array of strings, no prose, no markdown fences.\n\n"
+        f"{text}"
     )
-    return _parse_json(_call(prompt))
+
+
+def extract_requirements(regulatory_text: str) -> list[str]:
+    global _last_raw_response
+    chunks = [
+        regulatory_text[i : i + _EXTRACT_CHUNK_SIZE]
+        for i in range(0, len(regulatory_text), _EXTRACT_CHUNK_SIZE)
+    ]
+    print(f"[debug] extract_requirements: {len(regulatory_text):,} chars, {len(chunks)} chunk(s)", file=sys.stderr)
+    raw_parts: list[str] = []
+    all_requirements: list[str] = []
+    for idx, chunk in enumerate(chunks):
+        raw = _call(_extract_prompt(chunk))
+        raw_parts.append(f"--- chunk {idx + 1}/{len(chunks)} ---\n{raw}")
+        print(f"[debug] chunk {idx + 1}/{len(chunks)}: {len(chunk):,} chars in, {len(raw):,} chars out", file=sys.stderr)
+        try:
+            all_requirements.extend(_parse_json(raw))
+        except Exception as e:
+            print(f"[debug] _parse_json failed chunk {idx + 1}: {e}\nOffending text: {raw}", file=sys.stderr)
+            raise
+    _last_raw_response = "\n\n".join(raw_parts)
+    return all_requirements
 
 
 def check_requirements_batch(requirements: list[str], policy_text: str) -> list[dict]:
