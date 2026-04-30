@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import streamlit as st
 
 from pdf_utils import extract_pdf_text
-import llm
 from llm import extract_requirements, check_requirements_batch
 from retrieval import PolicyIndex
 
@@ -42,23 +41,15 @@ if regulatory_file:
 
     if "requirements" not in st.session_state:
         regulatory_text = extract_pdf_text(regulatory_file)
-        with st.expander("🔧 Debug: extraction", expanded=True):
-            st.write(f"**Text length:** {len(regulatory_text):,} chars")
-            st.text(regulatory_text[:2000])
-            st.write("**...tail (last 500 chars):**")
-            st.text(regulatory_text[-500:])
+        extr_progress = st.progress(0.0)
+
+        def on_chunk(done: int, total: int) -> None:
+            extr_progress.progress(done / total)
+
         with st.spinner("Extracting requirements…"):
-            st.session_state["requirements"] = extract_requirements(regulatory_text)
-        with st.expander("🔧 Debug: requirements", expanded=True):
-            reqs = st.session_state["requirements"]
-            st.write(f"**Count:** {len(reqs)}")
-            if reqs:
-                for r in reqs[:3]:
-                    st.write(f"- {r}")
-            else:
-                st.write("(empty list)")
-            st.write("**Raw model response:**")
-            st.text(llm._last_raw_response)
+            st.session_state["requirements"] = extract_requirements(
+                regulatory_text, on_chunk
+            )
 
     requirements = st.session_state["requirements"]
 

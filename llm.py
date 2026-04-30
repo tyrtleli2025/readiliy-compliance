@@ -1,8 +1,8 @@
 import json
 import os
 import re
-import sys
 import warnings
+from collections.abc import Callable
 
 from dotenv import load_dotenv
 from google import genai
@@ -11,7 +11,6 @@ from google.genai import types
 load_dotenv()
 
 _client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-_last_raw_response: str = ""
 _EXTRACT_CHUNK_SIZE = 20_000
 
 
@@ -72,25 +71,19 @@ def _extract_prompt(text: str) -> str:
     )
 
 
-def extract_requirements(regulatory_text: str) -> list[str]:
-    global _last_raw_response
+def extract_requirements(
+    regulatory_text: str,
+    on_chunk: Callable[[int, int], None] | None = None,
+) -> list[str]:
     chunks = [
         regulatory_text[i : i + _EXTRACT_CHUNK_SIZE]
         for i in range(0, len(regulatory_text), _EXTRACT_CHUNK_SIZE)
     ]
-    print(f"[debug] extract_requirements: {len(regulatory_text):,} chars, {len(chunks)} chunk(s)", file=sys.stderr)
-    raw_parts: list[str] = []
     all_requirements: list[str] = []
     for idx, chunk in enumerate(chunks):
-        raw = _call(_extract_prompt(chunk))
-        raw_parts.append(f"--- chunk {idx + 1}/{len(chunks)} ---\n{raw}")
-        print(f"[debug] chunk {idx + 1}/{len(chunks)}: {len(chunk):,} chars in, {len(raw):,} chars out", file=sys.stderr)
-        try:
-            all_requirements.extend(_parse_json(raw))
-        except Exception as e:
-            print(f"[debug] _parse_json failed chunk {idx + 1}: {e}\nOffending text: {raw}", file=sys.stderr)
-            raise
-    _last_raw_response = "\n\n".join(raw_parts)
+        all_requirements.extend(_parse_json(_call(_extract_prompt(chunk))))
+        if on_chunk:
+            on_chunk(idx + 1, len(chunks))
     return all_requirements
 
 
