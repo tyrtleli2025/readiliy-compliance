@@ -18,7 +18,11 @@ def _call(prompt: str) -> str:
     response = _client.models.generate_content(
         model="gemini-2.5-flash",
         contents=[{"role": "user", "parts": [{"text": prompt}]}],
-        config=types.GenerateContentConfig(temperature=0, max_output_tokens=65536),
+        config=types.GenerateContentConfig(
+            temperature=0,
+            max_output_tokens=65536,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        ),
     )
     return response.text.strip()
 
