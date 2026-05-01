@@ -88,7 +88,14 @@ def extract_requirements(
         all_requirements.extend(_parse_json(_call(_extract_prompt(chunk))))
         if on_chunk:
             on_chunk(idx + 1, len(chunks))
-    return all_requirements
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for req in all_requirements:
+        key = req.strip().lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(req)
+    return deduped
 
 
 def check_requirements_batch(requirements: list[str], policy_text: str) -> list[dict]:
